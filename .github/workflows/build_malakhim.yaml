@@ -1,4 +1,4 @@
-name: Build Malachim release zip
+name: Build Malakhim release zip
 
 on:
   workflow_dispatch:
@@ -23,13 +23,11 @@ jobs:
   zip:
     runs-on: ubuntu-latest
     steps:
-      # ---- Checkout repo ----
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # ---- Ensure tools (zip, jq, rsync) ----
       - name: Ensure tools (zip, jq, rsync)
         shell: bash
         run: |
@@ -37,40 +35,66 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y zip jq rsync
 
-      # ---- Read version from .TOC (case-insensitive; root or Malachim/) ----
-      - name: Read version from .TOC
-        id: ver
+      # Find the .toc (any folder / any case), read version, and derive addon name/dir
+      - name: Detect addon (.toc) and version
+        id: detect
         shell: bash
         run: |
           set -e
-          TOC_PATH=""
-          for p in "Malachim/Malachim.toc" "Malachim/Malachim.TOC" "Malachim.toc" "Malachim.TOC"; do
-            if [ -f "$p" ]; then TOC_PATH="$p"; break; fi
-          done
+
+          # Find the first *.toc anywhere (prefer top-level or matching repo name)
+          TOC_PATH="$( \
+            { [ -f "Malakhim.toc" ] && echo "Malakhim.toc"; } \
+            || { [ -f "Malakhim.TOC" ] && echo "Malakhim.TOC"; } \
+            || { [ -f "Malakhim.toc" ] && echo "Malakhim.toc"; } \
+            || { [ -f "Malakhim.TOC" ] && echo "Malakhim.TOC"; } \
+            || find . -maxdepth 2 -type f -iname "*.toc" | head -n1 \
+          )"
 
           if [ -z "$TOC_PATH" ]; then
-            echo "No .TOC found; defaulting to 0.0.0"
-            echo "ADDON_VER=0.0.0" >> "$GITHUB_ENV"
-            echo "TOC_PATH=" >> "$GITHUB_ENV"
-          else
-            VER=$(awk 'BEGIN{IGNORECASE=1} /^##[[:space:]]*Version[[:space:]]*:/ {sub(/^[^:]*:[[:space:]]*/,""); print; exit}' "$TOC_PATH")
-            [ -z "$VER" ] && VER="0.0.0"
-            VER=$(printf '%s' "$VER" | tr -cd '0-9A-Za-z._-')
-            echo "Detected version: $VER (from $TOC_PATH)"
-            echo "ADDON_VER=$VER" >> "$GITHUB_ENV"
-            echo "TOC_PATH=$TOC_PATH" >> "$GITHUB_ENV"
+            echo "No .toc found. Failing early."
+            exit 1
           fi
 
-      # ---- Stage addon files only (no git metadata) ----
+          # Normalize dir/name
+          ADDON_DIR="$(dirname "$TOC_PATH")"
+          [ "$ADDON_DIR" = "." ] && ADDON_DIR=""
+          ADDON_FILE="$(basename "$TOC_PATH")"
+          ADDON_NAME="${ADDON_FILE%.*}"
+
+          # Version (case-insensitive key)
+          VER="$(awk 'BEGIN{IGNORECASE=1} /^##[[:space:]]*Version[[:space:]]*:/ {sub(/^[^:]*:[[:space:]]*/,""); print; exit}' "$TOC_PATH")"
+          [ -z "$VER" ] && VER="0.0.0"
+          VER="$(printf '%s' "$VER" | tr -cd '0-9A-Za-z._-')"
+
+          echo "Found TOC: $TOC_PATH"
+          echo "Addon name: $ADDON_NAME"
+          echo "Version:    $VER"
+          echo "Source dir: ${ADDON_DIR:-.}"
+
+          {
+            echo "TOC_PATH=$TOC_PATH"
+            echo "ADDON_NAME=$ADDON_NAME"
+            echo "ADDON_DIR=$ADDON_DIR"
+            echo "ADDON_VER=$VER"
+          } >> "$GITHUB_ENV"
+
       - name: Stage addon files
         shell: bash
         run: |
           set -e
-          STAGE="dist/Malachim"
+          : "${ADDON_NAME:?missing}"
+          : "${TOC_PATH:?missing}"
+          # If ADDON_DIR is empty, use repo root
+          SRC="${ADDON_DIR:-.}"
+          STAGE="dist/${ADDON_NAME}"
+
+          rm -rf dist
           mkdir -p "$STAGE"
 
+          # Stage only addon-relevant files from the detected source dir
           rsync -av --prune-empty-dirs \
-            --include='Malachim.toc' --include='Malachim.TOC' \
+            --include="${ADDON_NAME}.toc" --include="${ADDON_NAME}.TOC" \
             --include='*.lua' --include='*.xml' \
             --include='*.blp' --include='*.tga' --include='*.dds' --include='*.mdx' \
             --include='*.mp3' --include='*.ogg' --include='*.wav' \
@@ -79,39 +103,28 @@ jobs:
             --include='Fonts/**' --include='Sound/**' --include='Libs/**' --include='Modules/**' \
             --include='*/' \
             --exclude='*' \
-            ./ "$STAGE/"
+            "$SRC"/ "$STAGE/"
 
           echo "Staged contents:"
           find dist -maxdepth 3 -type f -print
 
-          # Robust .toc presence test
-          if [ -n "${TOC_PATH:-}" ]; then
-            TOC_BASE="$(basename "$TOC_PATH")"
-            if [ ! -f "$STAGE/$TOC_BASE" ]; then
-              echo "ERROR: expected $TOC_BASE in $STAGE but it wasn't found."
-              ls -l "$STAGE" || true
-              exit 1
-            fi
-          else
-            if ! ls "$STAGE"/Malachim.[Tt][Oo][Cc] >/dev/null 2>&1; then
-              echo "ERROR: .toc not found in $STAGE (looked for Malachim.[Tt][Oo][Cc])"
-              ls -l "$STAGE" || true
-              exit 1
-            fi
+          # Verify the .toc exists in the staged folder
+          if ! ls "$STAGE"/"${ADDON_NAME}".[Tt][Oo][Cc] >/dev/null 2>&1; then
+            echo "ERROR: ${ADDON_NAME}.toc not found in $STAGE"
+            ls -l "$STAGE" || true
+            exit 1
           fi
 
-      # ---- Compose release notes (from VERSION if present) ----
       - name: Compose release notes (from VERSION if present)
         shell: bash
         run: |
           set -e
           mkdir -p dist
 
-          TITLE="Malachim v${ADDON_VER}"
+          TITLE="${ADDON_NAME} v${ADDON_VER}"
           DATE_UTC="$(date -u +%Y-%m-%d)"
           PREV_TAG="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
 
-          # Defaults
           LABEL=""; SUMMARY=""; FEATURES=""; FIXES=""; CHANGES=""
           KNOWN=""; COMPAT=""; THANKS=""
 
@@ -148,13 +161,13 @@ jobs:
             if [ -n "$COMPAT" ]; then
               echo "$COMPAT"
             else
-              echo "- Turtle WoW (Classic 1.12.x / 11200)"
-              echo "- Lua 5.0"
+              echo "- Epoch (WotLK 3.3.5a / Interface 30300)"
+              echo "- Lua 5.1"
             fi
             echo
             echo "## Installation"
             echo "1. Download the zip attached below."
-            echo "2. Unzip so the folder **Malachim/** sits in your \`Interface/AddOns/\` directory."
+            echo "2. Unzip so the folder **${ADDON_NAME}/** sits in your \`Interface/AddOns/\` directory."
             echo "3. Restart the client or type \`/reload\`."
             [ -n "$KNOWN" ] && { echo; echo "## Known Issues"; echo "$KNOWN"; }
             [ -n "$THANKS" ] && { echo; echo "## Thanks"; echo "$THANKS"; }
@@ -163,34 +176,28 @@ jobs:
           echo "---- RELEASE_NOTES.md ----"
           sed -n '1,200p' dist/RELEASE_NOTES.md
 
-      # ---- Place notes (and VERSION) inside addon folder (optional) ----
-      # If you want the files shipped INSIDE the Malachim/ folder, keep this step.
-      # Remove this step if you prefer the zip to contain only game files.
-      - name: Add notes/VERSION into Malachim folder (optional)
+      - name: Add notes/VERSION into addon folder (optional)
         shell: bash
         run: |
           set -e
-          cp dist/RELEASE_NOTES.md dist/Malachim/RELEASE_NOTES.txt
-          [ -f VERSION ] && cp VERSION dist/Malachim/VERSION.json || true
+          cp dist/RELEASE_NOTES.md "dist/${ADDON_NAME}/RELEASE_NOTES.txt"
+          [ -f VERSION ] && cp VERSION "dist/${ADDON_NAME}/VERSION.json" || true
 
-      # ---- Zip (folder inside = Malachim/) ----
       - name: Package zip
         shell: bash
         run: |
           set -e
-          ZIP="Malachim-v${ADDON_VER}-release.zip"
-          ( cd dist && zip -r9 "../$ZIP" "Malachim" )
+          ZIP="${ADDON_NAME}-v${ADDON_VER}-release.zip"
+          ( cd dist && zip -r9 "../$ZIP" "${ADDON_NAME}" )
           ls -l "$ZIP"
           echo "ZIP_NAME=$ZIP" >> "$GITHUB_ENV"
 
-      # ---- Upload artifact (Actions) ----
       - name: Upload artifact (Actions)
         uses: actions/upload-artifact@v4
         with:
-          name: Malachim-v${{ env.ADDON_VER }}-release
+          name: ${{ env.ADDON_NAME }}-v${{ env.ADDON_VER }}-release
           path: ${{ env.ZIP_NAME }}
 
-      # ---- Create GitHub Release (with custom notes & extra asset) ----
       - name: Create GitHub Release and upload assets
         uses: softprops/action-gh-release@v2
         with:
