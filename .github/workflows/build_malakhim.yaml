@@ -94,6 +94,9 @@ jobs:
 
           # Stage only addon-relevant files from the detected source dir
           rsync -av --prune-empty-dirs \
+            --exclude='/Archived/**' \
+            --exclude='/Notes/**' \
+            --exclude='/Bugs/**' \
             --include="${ADDON_NAME}.toc" --include="${ADDON_NAME}.TOC" \
             --include='*.lua' --include='*.xml' \
             --include='*.blp' --include='*.tga' --include='*.dds' --include='*.mdx' \
