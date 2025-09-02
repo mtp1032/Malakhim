@@ -1,5 +1,8 @@
 # Object file
-*.o
+*Archived
+*Notes
+*Bugs
+*Malakhim-code-workspace
 
 # Ada Library Information
 *.ali
