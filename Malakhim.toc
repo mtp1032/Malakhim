@@ -1,0 +1,19 @@
+## Interface: 30300
+## -----------------------------------------------------------------------
+## Title: Malakhim
+## Notes: Prints message to when ever a player experiences a skill up or loots and item
+## Version: 0.0.1.30300
+## X-Expansion: Classic+ (Epoch)
+## SavedVariablesPerCharacter:
+## 25 August, 2025
+## OptionalDeps:
+## IconTexture:
+## X-github: https://github.com/mtp1032/Malakhim
+
+#---------------------------------------------
+# Required / Prerequisite files  
+#---------------------------------------------
+Core.lua
+Localizations.lua
+ScrollMessage.lua
+EventHandler.lua
